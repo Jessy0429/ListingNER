@@ -1,7 +1,7 @@
-def labels_map():
+def labels_map(data_pth):
     label_map = {'O': 0}
     cnt = 0
-    with open('../data/example/train_500.txt', 'r', encoding='utf-8') as f:
+    with open(data_pth, 'r', encoding='utf-8') as f:
         for item in f.readlines():
             label = item.strip().split()
             if len(label) > 0:
@@ -14,8 +14,8 @@ def labels_map():
     return label_map
 
 
-def labels_unmap():
-    labels_mapping = labels_map()
+def labels_unmap(data_pth):
+    labels_mapping = labels_map(data_pth)
     return {v: k for k, v in labels_mapping.items()}
 
 
