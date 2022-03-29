@@ -11,6 +11,7 @@ def labels_map(data_pth):
             if label not in label_map:
                 cnt += 1
                 label_map[label] = cnt
+    cnt += 1
     return label_map
 
 

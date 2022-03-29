@@ -6,7 +6,7 @@ import logging
 import numpy as np
 import argparse
 from sklearn.metrics import accuracy_score, classification_report
-from transformers import BertTokenizer, BertConfig, AdamW, get_linear_schedule_with_warmup
+from transformers import BertTokenizer, AdamW, get_linear_schedule_with_warmup
 from LabelsUtils import labels_unmap
 from NerModel import *
 
@@ -66,7 +66,7 @@ def train(args, model, train_dataloader, test_dataloader):
 
     f1 = evaluate(args, model, test_dataloader)
     if f1 > best_f1:
-        model.save_pretrained(args.outpuut_dir)
+        torch.save(model, args.output_dir+'BertCrf.pth')
         # Good practice: save your training arguments together with the trained model
         torch.save(args, os.path.join(args.output_dir, "training_args.bin"))
 
@@ -106,6 +106,25 @@ def evaluate(args, model, el_dataloader):
     return ret['accuracy']
 
 
+def predict(args, model, pred_dataloader):
+    model.eval()
+    logger.info("***** Running Prediction *****")
+    pred_ids = []
+    pred_labels = []
+    with torch.no_grad():
+        for idx, batch in enumerate(pred_dataloader):
+            ids = batch['input_ids'].to(args.device, dtype=torch.long)
+            mask = batch['mask'].to(args.device, dtype=torch.bool)
+            output = model(ids=ids, mask=mask, targets=None)
+            pred_ids.extend(output)
+            for ids in pred_ids:
+                pred_labels.append([args.labels_unmapping[id] for id in ids][1:-1])
+            return pred_labels
+    for ids in pred_ids:
+        pred_labels.append([args.labels_unmapping[id] for id in ids][1:-1])
+    return pred_labels
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", default="../data/example/")
@@ -124,6 +143,8 @@ def main():
                         help="训练集的batch_size")
     parser.add_argument("--test_batch_size", default=8, type=int,
                         help="验证集的batch_size")
+    parser.add_argument("--pred_batch_size", default=8, type=int,
+                        help="训练集的batch_size")
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="梯度累计更新的步骤，用来弥补GPU过小的情况")
     parser.add_argument("--learning_rate", default=5e-5, type=float,
@@ -141,20 +162,54 @@ def main():
 
     args = parser.parse_args()
     args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    args.train_batch_size = 16
+    args.train_batch_size = 8
     args.test_batch_size = 4
     args.output_dir = '../models/BertCrf/'
+    args.data_dir = '../data/train_data/'
+    args.predict_dir = '../data/preliminary_test_a/'
     args.learning_rate = 1e-5
-    args.labels_len = 81
-    args.labels_unmapping = labels_unmap('../data/example/train_500.txt')
-    train_dataloader, test_dataloader = makeData(args)
+    args.labels_len = 105
+    args.max_seq_length = 100
+    args.labels_unmapping = labels_unmap('../data/train_data/train.txt')
+    train_dataloader, test_dataloader = makeTrainData(args)
+    if args.pre_train_model == 'bert-base-chinese':
+        model = BertCrfModel(args)
+    else:
+        model = torch.load(args.output_dir+'BertCrf.pth')
 
-    config = BertConfig.from_pretrained(args.model_config, num_labels=args.labels_len)
-    model = BertCrfModel.from_pretrained(args.pre_train_model, config=config)
     model.to(args.device)
-
     train(args, model, train_dataloader, test_dataloader)
-    # evaluate(args, model, test_dataloader)
+    evaluate(args, model, test_dataloader)
+
+    model = torch.load(args.output_dir+'BertCrf.pth')
+    pred_dataloader = makePredictData(args)
+    pred = predict(args, model, pred_dataloader)
+
+    output_list = []
+    i = 0
+    j = 0
+    with open('../data/preliminary_test_a/sample_per_line_preliminary_A.txt.txt', 'r', encoding='utf-8') as f:
+        for item in f.readlines():
+            if item.strip() == "":
+                continue
+            else:
+                if item.strip() == 0:
+                    continue
+                else:
+                    for arr in item:
+                        if arr == " ":
+                            output_list.append(" O")
+                        else:
+                            output_list.append(arr+" "+pred[i][j])
+                        j += 1
+            i += 1
+            j = 0
+            output_list.append("")
+    with open('../data/preliminary_test_a/output_BertCrf', "w") as writer:
+        for record in output_list:
+            writer.write(json.dumps(record) + '\n')
+
+
 
 if __name__ == "__main__":
     # MODEL_NAME = 'hfl/chinese-roberta-wwm-ext'
