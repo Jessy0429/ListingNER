@@ -28,9 +28,9 @@ def train(args, model, train_dataloader, test_dataloader):
 
     for epoch in range(args.train_epochs):
         for idx, batch in enumerate(tr_dataloader):
-            ids = batch['input_ids'].to(args.device, dtype=torch.long)  # 4,93 batch_size,max_len
-            mask = batch['mask'].to(args.device, dtype=torch.bool)  # 4,93
-            targets = batch['targets'].to(args.device, dtype=torch.long)  # 4,93
+            ids = batch['input_ids'].to(args.device, dtype=torch.long)
+            mask = batch['mask'].to(args.device, dtype=torch.bool)
+            targets = batch['targets'].to(args.device, dtype=torch.long)
 
             outputs = model(ids=ids, mask=mask, targets=targets)
             initial_loss = outputs[0]
@@ -117,9 +117,6 @@ def predict(args, model, pred_dataloader):
             mask = batch['mask'].to(args.device, dtype=torch.bool)
             output = model(ids=ids, mask=mask, targets=None)
             pred_ids.extend(output)
-            for ids in pred_ids:
-                pred_labels.append([args.labels_unmapping[id] for id in ids][1:-1])
-            return pred_labels
     for ids in pred_ids:
         pred_labels.append([args.labels_unmapping[id] for id in ids][1:-1])
     return pred_labels
@@ -173,7 +170,8 @@ def main():
     args.labels_unmapping = labels_unmap('../data/train_data/train.txt')
     train_dataloader, test_dataloader = makeTrainData(args)
     if args.pre_train_model == 'bert-base-chinese':
-        model = BertCrfModel(args)
+        # model = BertCrfModel(args)
+        model = BertModel(args)
     else:
         model = torch.load(args.output_dir+'BertCrf.pth')
 
@@ -197,11 +195,13 @@ def main():
                     continue
                 else:
                     for arr in item:
+                        if arr == "\n":
+                            break
                         if arr == " ":
-                            output_list.append(" O")
+                            output_list.append(arr+" O")
                         else:
                             output_list.append(arr+" "+pred[i][j])
-                        j += 1
+                            j += 1
             i += 1
             j = 0
             output_list.append("")

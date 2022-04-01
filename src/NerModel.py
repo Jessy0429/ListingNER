@@ -59,6 +59,34 @@ def makePredictData(args):
     return pred_dataloader
 
 
+class BertModel(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.config = BertConfig.from_pretrained(args.model_config, num_labels=args.labels_len)
+        self.bert = BertForTokenClassification.from_pretrained(args.pre_train_model, config=self.config)
+
+    def forward(self, ids, mask, targets):
+        if targets is not None:
+            output = self.bert(input_ids=ids, attention_mask=mask, labels=targets)
+            loss = output[0]
+            initial_logits = output[1]
+        else:
+            initial_logits = self.bert(input_ids=ids, attention_mask=mask)[0]
+
+        active_logits = torch.argmax(initial_logits,
+                                             axis=2)  # 取出每个token对应概率最大的标签索引 shape (batch_size * seq_len,)
+        active_len = mask.sum(dim=1).tolist()
+
+        logits = []
+        for i, item in enumerate(active_logits.tolist()):
+            logits.append(item[:active_len[i]])
+
+        if targets is not None:
+            return loss, logits
+
+        return logits
+
+
 class BertCrfModel(nn.Module):
     def __init__(self, args):
         super().__init__()
