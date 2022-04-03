@@ -61,12 +61,12 @@ def tokenizeAndPreserveLabels(tokens, labels, tokenizer, label_map):
 if __name__ == "__main__":
     labels_mapping = labels_map('../data/train_data/train.txt')
     data = loadData('../data/train_data/train.txt', True)
-    max = 0
-    for sentence in data:
-        length = len(sentence['tokens'])
-        if length > max:
-            max = length
-    MAX_LEN = max  # 固定tokens长度
+    # max = 0
+    # for sentence in data:
+    #     length = len(sentence['tokens'])
+    #     if length > max:
+    #         max = length
+    # MAX_LEN = max  # 固定tokens长度
     tokenizer = BertTokenizer.from_pretrained(MODEL_NAME)
     encoding_result = []
     for item in data:
