@@ -1,4 +1,3 @@
-import pandas as pd
 import os
 import torch
 import json
@@ -9,6 +8,7 @@ from sklearn.metrics import accuracy_score, classification_report
 from transformers import BertTokenizer, AdamW, get_linear_schedule_with_warmup
 from LabelsUtils import labels_unmap
 from NerModel import *
+from  collections import OrderedDict
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -16,10 +16,18 @@ logger = logging.getLogger(__name__)
 
 def train(args, model, train_dataloader, test_dataloader):
     tr_dataloader = train_dataloader
-    optimizer = AdamW(params=model.bert.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=len(tr_dataloader))
+    no_decay = ['bias', 'LayerNorm.weight', 'transitions']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+         'weight_decay': args.weight_decay},
+        {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    ]
+    optimizer = AdamW(params=optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    t_total = len(tr_dataloader) * args.train_epochs
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_proportion * t_total,
+                                                num_training_steps=t_total)
 
-    model.train()
+
     logger.info("******Run Training******")
 
     model.zero_grad()
@@ -28,9 +36,10 @@ def train(args, model, train_dataloader, test_dataloader):
 
     for epoch in range(args.train_epochs):
         for idx, batch in enumerate(tr_dataloader):
-            ids = batch['input_ids'].to(args.device, dtype=torch.long)
-            mask = batch['mask'].to(args.device, dtype=torch.bool)
-            targets = batch['targets'].to(args.device, dtype=torch.long)
+            model.train()
+            ids = batch['input_ids'].to(args.device, dtype=torch.long)  # 4,93 batch_size,max_len
+            mask = batch['mask'].to(args.device, dtype=torch.bool)  # 4,93
+            targets = batch['targets'].to(args.device, dtype=torch.long)  # 4,93
 
             outputs = model(ids=ids, mask=mask, targets=targets)
             initial_loss = outputs[0]
@@ -51,24 +60,25 @@ def train(args, model, train_dataloader, test_dataloader):
                 scheduler.step()
                 model.zero_grad()
 
-                if tr_steps % 50 == 0:
+                if tr_steps % 100 == 0:
                     logger.info("EPOCH = [%d/%d] train_steps = %d   loss = %f", epoch, args.train_epochs, tr_steps,
-                                logging_loss)
-                logging_loss = 0.0
-        logger.info("Training loss epoch: %f", tr_loss / tr_steps)
+                                logging_loss / 100)
+                    logging_loss = 0.0
+        logger.info("Training loss epoch[%d/%d]: %f", epoch, args.train_epochs, tr_loss / tr_steps)
         f1 = evaluate(args, model, test_dataloader)
-        if float(f1) > best_f1:
-            model.save_pretrained(args.output_dir)
+        if float(f1) >= best_f1:
+            torch.save(model, args.output_dir + 'BertCrf.pth')
             # Good practice: save your training arguments together with the trained model
             torch.save(args, os.path.join(args.output_dir, "training_args.bin"))
         tr_loss = 0.0
         tr_steps = 0
 
-    f1 = evaluate(args, model, test_dataloader)
-    if f1 > best_f1:
-        torch.save(model, args.output_dir+'BertCrf.pth')
+    # f1 = evaluate(args, model, test_dataloader)
+    # model.train()
+    # if f1 >= best_f1:
+    #     torch.save(model, args.output_dir + 'BertCrf.pth')
         # Good practice: save your training arguments together with the trained model
-        torch.save(args, os.path.join(args.output_dir, "training_args.bin"))
+        # torch.save(args, os.path.join(args.output_dir, "training_args.bin"))
 
 
 def evaluate(args, model, el_dataloader):
@@ -93,7 +103,7 @@ def evaluate(args, model, el_dataloader):
 
             el_preds.extend(el_logits)
             active_accuracy = mask.view(-1) == 1
-            targets = torch.masked_select(targets.view(-1), active_accuracy)
+            targets = torch.masked_select(targets.view(-1), active_accuracy).cpu()
             el_labels.extend(np.array(targets).flatten())
 
     avg_loss = el_loss / eval_steps
@@ -150,31 +160,55 @@ def main():
                         help="Epsilon for Adam optimizer.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float,
                         help="最大的梯度更新")
-    parser.add_argument("--train_epochs", default=8, type=float,
+    parser.add_argument("--train_epochs", default=16, type=float,
                         help="epoch 数目")
     parser.add_argument('--seed', type=int, default=23,
                         help="random seed for initialization")
-    parser.add_argument("--warmup_steps", default=0, type=int,
-                        help="让学习增加到1的步数，在warmup_steps后，再衰减到0")
+    parser.add_argument("--warmup_proportion", default=0.1, type=float,
+                        help="让学习增加到1的步数比例，在warmup_steps后，再衰减到0")
+    parser.add_argument("--weight_decay", default=0.01, type=float,
+                        help="权重衰减")
+    parser.add_argument("--mlm_pretrain", default=False, type=bool,
+                        help="mlm预训练")
 
     args = parser.parse_args()
     args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    args.train_batch_size = 8
-    args.test_batch_size = 4
+    args.train_batch_size = 32
+    args.test_batch_size = 32
+    args.train_epochs = 10
     args.output_dir = '../models/BertCrf/'
     args.data_dir = '../data/train_data/'
     args.predict_dir = '../data/preliminary_test_a/'
-    args.learning_rate = 1e-5
+    args.learning_rate = 2e-5
     args.labels_len = 105
     args.max_seq_length = 100
     args.labels_unmapping = labels_unmap('../data/train_data/train.txt')
+    args.mlm_pretrain = True
+    # args.pre_train_model = 'BertCrf'
+    args.pre_train_model = 'hfl/chinese-roberta-wwm-ext'
     train_dataloader, test_dataloader = makeTrainData(args)
-    if args.pre_train_model == 'bert-base-chinese':
-        # model = BertCrfModel(args)
-        model = BertModel(args)
+    if args.pre_train_model == 'bert-base-chinese' or args.pre_train_model == 'hfl/chinese-roberta-wwm-ext':
+        model = BertCrfModel(args)
+        # model = BertModel(args)
     else:
         model = torch.load(args.output_dir+'BertCrf.pth')
 
+    if args.mlm_pretrain:
+        state_dict_eb = torch.load("../models/MLM_BertCrf/Pre-training/bert_mlm_ep_1_eb.bin",
+                                map_location=torch.device('cpu'))
+        model.bert.bert.embeddings.load_state_dict(state_dict_eb)
+        state_dict_ec = torch.load("../models/MLM_BertCrf/Pre-training/bert_mlm_ep_1_ec.bin",
+                                map_location=torch.device('cpu'))
+        model.bert.bert.encoder.load_state_dict(state_dict_ec)
+        # for i, sub_model in enumerate(model.bert.bert.encoder.layer):
+        #     sub_model = model.bert.bert.encoder.layer[i]
+        #     state_dict = OrderedDict()
+        #     for key, value in state_dict_ec.items():
+        #         if int(key.split('.')[1]) == i:
+        #             state_dict['.'.join(key.split('.')[2:])] = value
+        #     sub_model.load_stact_dict(state_dict)
+
+        args.output_dir = '../models/MLM_BertCrf/Fine-tuning'
     model.to(args.device)
     train(args, model, train_dataloader, test_dataloader)
     evaluate(args, model, test_dataloader)
@@ -186,7 +220,7 @@ def main():
     output_list = []
     i = 0
     j = 0
-    with open('../data/preliminary_test_a/sample_per_line_preliminary_A.txt.txt', 'r', encoding='utf-8') as f:
+    with open('../data/preliminary_test_a/sample_per_line_preliminary_A.txt', 'r', encoding='utf-8') as f:
         for item in f.readlines():
             if item.strip() == "":
                 continue
@@ -205,9 +239,9 @@ def main():
             i += 1
             j = 0
             output_list.append("")
-    with open('../data/preliminary_test_a/output_BertCrf', "w") as writer:
+    with open('../data/preliminary_test_a/output_BertCrf.txt', "w") as writer:
         for record in output_list:
-            writer.write(json.dumps(record) + '\n')
+            writer.write(record + '\n')
 
 
 

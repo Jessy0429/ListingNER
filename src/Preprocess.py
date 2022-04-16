@@ -1,4 +1,3 @@
-import pandas as pd
 import numpy as np
 import json
 import torch
@@ -7,8 +6,8 @@ from transformers import BertTokenizer
 from LabelsUtils import labels_map
 
 MAX_LEN = 100
-MODEL_NAME = 'bert-base-chinese'
-# MODEL_NAME = 'hfl/chinese-roberta-wwm-ext'
+# MODEL_NAME = 'bert-base-chinese'
+MODEL_NAME = 'hfl/chinese-roberta-wwm-ext'
 
 
 def loadData(data_pth, is_train):

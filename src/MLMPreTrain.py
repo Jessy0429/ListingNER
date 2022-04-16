@@ -99,19 +99,29 @@ def train(model, config, dataloader):
     optimizer = AdamW(params=optimizer_grouped_parameters, lr=config.learning_rate, weight_decay=config.weight_decay)
     model.train()
     for epoch in range(config.epoch):
+        if epoch != 2:
+            continue
         training_loss = 0
+        logging_loss = 0.0
         print("Epoch: {}".format(epoch + 1))
         for ids, batch in enumerate(dataloader):
             input_ids = batch['inputs'].squeeze(1).to(config.device)
             labels = batch['labels'].squeeze(1).to(config.device)
             loss = model(input_ids=input_ids, labels=labels).loss
+            logging_loss += loss
+            if (ids+1) % 500 == 0:
+                print("[{}/{}] avg_loss:{}".format(ids+1, len(dataloader), logging_loss / 500))
+                logging_loss = 0.0
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             model.zero_grad()
             training_loss += loss.item()
         print("Training loss: ", training_loss)
-
+        torch.save(bert_model.bert.embeddings.state_dict(),
+                   os.path.join(config.save_path, 'bert_mlm_ep_{}_eb.bin'.format(epoch)))
+        torch.save(bert_model.bert.encoder.state_dict(),
+                   os.path.join(config.save_path, 'bert_mlm_ep_{}_ec.bin'.format(epoch)))
     return 0
 
 
@@ -124,22 +134,25 @@ if __name__ == "__main__":
             if item.strip() == "":
                 continue
             else:
-                arr = item.strip()
-                arr.replace(" ", "")
-                training_texts.append(arr)
-                if max_len < len(arr):
-                    max_len = len(arr)
+                arrs = item.strip().split('\t')
+                for arr in arrs:
+                    arr.replace(" ", "")
+                    training_texts.append(arr)
+                    if max_len < len(arr):
+                        max_len = len(arr)
+                        # if max_len >= 100:
+                        #     print(max_len)
 
     config = MLMConfig()
-    config.trainingConfig(max_len=max_len, batch_size=4, epoch=5, learning_rate=2e-5, weight_decay=0, device=device)
-    config.ioConfig('hfl/chinese-roberta-wwm-ext', '../models/FinetuneEmbeddingModel')
+    config.trainingConfig(max_len=max_len+2, batch_size=32, epoch=3, learning_rate=2e-5, weight_decay=0, device=device)
+    config.ioConfig('hfl/chinese-roberta-wwm-ext', '../models/MLM_BertCrf/Pre-training')
     tokenizer = BertTokenizer.from_pretrained(config.from_path)
     train_dataset = MLMDataset(training_texts, tokenizer, config)
     train_dataloader = DataLoader(train_dataset, batch_size=config.batch_size,  shuffle=True, num_workers=0)
-
     bert_model = BertForMaskedLM.from_pretrained(config.from_path)
     bert_model.to(device)
     train(bert_model, config, train_dataloader)
+
 
 
 
